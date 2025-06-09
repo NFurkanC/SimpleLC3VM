@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 //16-bit memory locations
 #define MEMORY_MAX (1<<16)
@@ -53,10 +54,107 @@ enum{
 };
 
 __uint16_t sign_extend(__uint16_t x, int bit_count){
-    if((x >> (bit_count - 1))& 1){
-        x |= (0xFFFF << bit_count);
+    if((x >> (bit_count - 1)) & 1){
+        /* use 16-bit mask to avoid sign issues with larger integer types */
+        x |= (uint16_t)(0xFFFF << bit_count);
     }
     return x;
+}
+
+/* forward declaration */
+void update_flags(__uint16_t r);
+
+/* simple memory helpers */
+__uint16_t mem_read(__uint16_t address){
+    return memory[address];
+}
+
+void mem_write(__uint16_t address, __uint16_t val){
+    memory[address] = val;
+}
+
+/* placeholder image loader - loads raw binary into memory */
+int read_image(const char* path){
+    FILE* file = fopen(path, "rb");
+    if(!file){
+        return 0;
+    }
+
+    /* first 16 bits of the file are the origin */
+    uint16_t origin;
+    if(fread(&origin, sizeof(origin), 1, file) != 1){
+        fclose(file);
+        return 0;
+    }
+
+    /* files are big endian */
+    origin = (origin << 8) | (origin >> 8);
+    uint16_t* mem = &memory[origin];
+    size_t max_read = MEMORY_MAX - origin;
+    size_t read = fread(mem, sizeof(uint16_t), max_read, file);
+    for(size_t i = 0; i < read; ++i){
+        mem[i] = (mem[i] << 8) | (mem[i] >> 8);
+    }
+
+    fclose(file);
+    return 1;
+}
+
+/* stubs for operations not yet implemented */
+void ldi(__uint16_t instr){
+    __uint16_t r0 = (instr >> 9) & 0x7;
+    __uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+    reg[r0] = mem_read(mem_read(reg[PC] + pc_offset));
+    update_flags(r0);
+}
+
+void lea(__uint16_t instr){
+    __uint16_t r0 = (instr >> 9) & 0x7;
+    __uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+    reg[r0] = reg[PC] + pc_offset;
+    update_flags(r0);
+}
+
+void not(__uint16_t instr){
+    __uint16_t r0 = (instr >> 9) & 0x7;
+    __uint16_t r1 = (instr >> 6) & 0x7;
+    reg[r0] = ~reg[r1];
+    update_flags(r0);
+}
+
+void st(__uint16_t instr){
+    __uint16_t r0 = (instr >> 9) & 0x7;
+    __uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+    mem_write(reg[PC] + pc_offset, reg[r0]);
+}
+
+void sti(__uint16_t instr){
+    __uint16_t r0 = (instr >> 9) & 0x7;
+    __uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+    mem_write(mem_read(reg[PC] + pc_offset), reg[r0]);
+}
+
+void str(__uint16_t instr){
+    __uint16_t r0 = (instr >> 9) & 0x7;
+    __uint16_t r1 = (instr >> 6) & 0x7;
+    __uint16_t offset = sign_extend(instr & 0x3F, 6);
+    mem_write(reg[r1] + offset, reg[r0]);
+}
+
+void trap(__uint16_t instr){
+    switch(instr & 0xFF){
+        case 0x25: /* HALT */
+            puts("HALT");
+            exit(0);
+            break;
+        default:
+            break;
+    }
+}
+
+void bad_op(){
+    fprintf(stderr, "Bad opcode encountered\n");
+    exit(1);
 }
 
 void update_flags(__uint16_t r){
@@ -195,22 +293,22 @@ int main(int argc, char* argv[]){
                 ldr(instr);
                 break;
             case OP_LEA:
-                lea();
+                lea(instr);
                 break;
             case OP_NOT:
-                not();
+                not(instr);
                 break;
             case OP_ST:
-                st();
+                st(instr);
                 break;
             case OP_STI:
-                sti();
+                sti(instr);
                 break;
             case OP_STR:
-                str();
+                str(instr);
                 break;
             case OP_TRAP:
-                trap();
+                trap(instr);
                 break;
             case OP_RES:
             case OP_RTI:
